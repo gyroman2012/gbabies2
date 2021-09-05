@@ -1,0 +1,124 @@
+import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import '../galleries/EmberleyGallery.dart';
+import 'package:flutter/material.dart';
+
+class EmberleyUploadScreen extends StatefulWidget {
+  @override
+  _EmberleyUploadScreenState createState() => _EmberleyUploadScreenState();
+}
+
+class _EmberleyUploadScreenState extends State<EmberleyUploadScreen> {
+  FirebaseFirestore _firebaseFirestore = FirebaseFirestore.instance;
+  FirebaseStorage _firebaseStorage = FirebaseStorage.instance;
+
+  List<UploadTask> uploadedTasks = [];
+
+  List<File> selectedFiles = [];
+
+  uploadFileToStorage(File file) {
+    UploadTask task = _firebaseStorage
+        .ref()
+        .child("emberley/${DateTime.now().toString()}")
+        .putFile(file);
+    return task;
+  }
+
+  writeImageUrlToFireStore(imageUrl) {
+    _firebaseFirestore
+        .collection("emberley")
+        .add({"url": imageUrl}).whenComplete(
+            () => print("$imageUrl is saved in Firestore"));
+  }
+
+  saveImageUrlToFirebase(UploadTask task) {
+    task.snapshotEvents.listen((snapShot) {
+      if (snapShot.state == TaskState.success) {
+        snapShot.ref
+            .getDownloadURL()
+            .then((imageUrl) => writeImageUrlToFireStore(imageUrl));
+      }
+    });
+  }
+
+  Future selectFileToUpload() async {
+    try {
+      FilePickerResult? result = await FilePicker.platform
+          .pickFiles(allowMultiple: true, type: FileType.image);
+
+      if (result != null) {
+        selectedFiles.clear();
+
+        result.files.forEach((selectedFile) {
+          var path = selectedFile.path;
+          File file = File(path);
+          selectedFiles.add(file);
+        });
+
+        selectedFiles.forEach((file) {
+          final UploadTask task = uploadFileToStorage(file);
+          saveImageUrlToFirebase(task);
+
+          setState(() {
+            uploadedTasks.add(task);
+          });
+        });
+      } else {
+        print("User has cancelled the selection");
+      }
+    } catch (e) {
+      print(e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.yellow[300],
+      appBar: AppBar(
+        backgroundColor: Colors.purple,
+        title: Text("Upload to Gallery"),
+        actions: [
+          IconButton(
+              icon: Icon(Icons.photo),
+              onPressed: () {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (context) => EmberleyGalleryScreen()));
+              })
+        ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: Colors.purple[300],
+        onPressed: () {
+          selectFileToUpload();
+        },
+        child: Icon(Icons.add),
+      ),
+      body: uploadedTasks.length == 0
+          ? Center(child: Text("Please tap on add button to upload images"))
+          : ListView.separated(
+              itemBuilder: (context, index) {
+                return StreamBuilder<TaskSnapshot>(
+                  builder: (context, snapShot) {
+                    return snapShot.hasError
+                        ? Text("There was an error in uploading file")
+                        : snapShot.hasData
+                            ? ListTile(
+                                title: Text(
+                                    "${snapShot.data!.bytesTransferred}/${snapShot.data!.totalBytes} ${snapShot.data!.state == TaskState.success ? "Completed" : snapShot.data!.state == TaskState.running ? "In Progress" : "Error"}"),
+                              )
+                            : Container();
+                  },
+                  stream: uploadedTasks[index].snapshotEvents,
+                );
+              },
+              separatorBuilder: (context, index) => Divider(),
+              itemCount: uploadedTasks.length,
+            ),
+    );
+  }
+}
